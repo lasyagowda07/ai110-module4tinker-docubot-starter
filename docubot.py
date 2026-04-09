@@ -9,6 +9,8 @@ Core DocuBot class responsible for:
 
 import os
 import glob
+import re
+from collections import defaultdict
 
 class DocuBot:
     def __init__(self, docs_folder="docs", llm_client=None):
@@ -22,8 +24,11 @@ class DocuBot:
         # Load documents into memory
         self.documents = self.load_documents()  # List of (filename, text)
 
-        # Build a retrieval index (implemented in Phase 1)
-        self.index = self.build_index(self.documents)
+        # Split documents into paragraph-level chunks for finer retrieval
+        self.chunks = self.chunk_documents(self.documents)  # List of (filename, chunk_text)
+
+        # Build a retrieval index over chunks (implemented in Phase 1)
+        self.index = self.build_index(self.chunks)
 
     # -----------------------------------------------------------
     # Document Loading
@@ -45,6 +50,24 @@ class DocuBot:
         return docs
 
     # -----------------------------------------------------------
+    # Chunking
+    # -----------------------------------------------------------
+
+    def chunk_documents(self, documents):
+        """
+        Splits each document into paragraph-level chunks (split on blank lines).
+        Returns a flat list of (filename, chunk_text) tuples.
+        Same shape as documents, so build_index and retrieve work unchanged.
+        """
+        chunks = []
+        for filename, text in documents:
+            for paragraph in text.split("\n\n"):
+                chunk = paragraph.strip()
+                if chunk:
+                    chunks.append((filename, chunk))
+        return chunks
+
+    # -----------------------------------------------------------
     # Index Construction (Phase 1)
     # -----------------------------------------------------------
 
@@ -63,8 +86,11 @@ class DocuBot:
         Keep this simple: split on whitespace, lowercase tokens,
         ignore punctuation if needed.
         """
-        index = {}
-        # TODO: implement simple indexing
+        index = defaultdict(set)
+        for filename, text in documents:
+            for word in re.split(r'\W+', text.lower()):
+                if word:
+                    index[word].add(filename)
         return index
 
     # -----------------------------------------------------------
@@ -81,8 +107,9 @@ class DocuBot:
         - Count how many appear in the text
         - Return the count as the score
         """
-        # TODO: implement scoring
-        return 0
+        query_words = set(re.split(r'\W+', query.lower()))
+        doc_words = set(re.split(r'\W+', text.lower()))
+        return len(query_words & doc_words)
 
     def retrieve(self, query, top_k=3):
         """
@@ -91,9 +118,20 @@ class DocuBot:
 
         Return a list of (filename, text) sorted by score descending.
         """
-        results = []
-        # TODO: implement retrieval logic
-        return results[:top_k]
+        query_words = set(re.split(r'\W+', query.lower())) - {""}
+        candidate_filenames = set()
+        for word in query_words:
+            candidate_filenames |= self.index.get(word, set())
+
+        scored = []
+        for filename, text in self.chunks:
+            if filename in candidate_filenames:
+                s = self.score_document(query, text)
+                if s > 0:
+                    scored.append((s, filename, text))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [(fn, txt) for _, fn, txt in scored[:top_k]]
 
     # -----------------------------------------------------------
     # Answering Modes
